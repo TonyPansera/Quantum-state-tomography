@@ -87,12 +87,21 @@ print("Five random samples according to the distribution:", svd.sample(5))
 svd2 = SVDistribution({StateVector([0]) : 0.1,
                       BasicState([1]) + BasicState([2]) : 0.2})
 svd2.normalize()  # distributions have to be normalized to make sense
-print(svd2, "sum of probabilities", sum(svd2.values()))
+
+
+print(svd)
+print(svd2)
 
 print("Tensor product")
 print(svd * svd2)  # Tensor product between distributions
 
 
+
+##################################
+#
+#### Results
+#
+##################################
 
 
 # The BSDistribution is a collection of FockStates

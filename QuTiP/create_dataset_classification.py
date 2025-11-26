@@ -67,6 +67,7 @@ def sample_pauli_measurements(ket, pauli_op, n_shots, p_err=0.0, rng=None):
     probs /= probs.sum()
 
     # Tirage aléatoire des outcomes selon probs
+    # eigvals sont les valeurs propres des matrices de Pauli, qui sont {-1, 1}
     ideal_outcomes = rng.choice(eigvals, size=n_shots, p=probs)
     
     # --- AJOUT DU BRUIT DE MESURE ---
