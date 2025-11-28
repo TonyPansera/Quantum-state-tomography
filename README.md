@@ -3,3 +3,6 @@ The objective of this project is to develop and evaluate a Quantum Machine Learn
 
 Libraries : 
 Qutip
+
+https://www.overleaf.com/6514264713mxcfbqkffgsx#2bd943
+
