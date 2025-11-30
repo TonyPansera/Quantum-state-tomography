@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Dataset generator for 1-qubit quantum state tomography (regression).
-- Uses QuTiP to construct qubit states and Pauli operators.
-- Generates random pure states uniformly on the Bloch sphere.
-- Simulates finite-shot measurements in X, Y, Z.
+- Uses QuTiP to construct qubit states
+- Generates random pure states uniformly on the Bloch sphere
+- Simulates shot measurements in X, Y, Z
 - Outputs a CSV file with:
     features:  X_mean, Y_mean, Z_mean
     targets:   theta, phi, cos_phi, sin_phi
@@ -37,8 +37,15 @@ def sample_bloch_angles():
         theta = arccos(u)
         phi ~ Uniform[0, 2π)
     """
+    # We want a direction uniformly distributed on the sphere.
+    # The surface element is: dA = sin(theta) * d(theta) * d(phi)
+    # Therefore theta does NOT have a uniform density: p(theta) proportional to sin(theta)
+    # To obtain the correct law, set u = cos(theta)
+    # Then: du = -sin(theta) * d(theta)  ->  uniform density in u
+    # So sampling u ~ Uniform[-1, 1] gives the correct p(theta)
     u = np.random.uniform(-1.0, 1.0)
     theta = np.arccos(u)
+    
     phi = np.random.uniform(0.0, 2.0 * np.pi)
     return theta, phi
 
@@ -72,38 +79,37 @@ def simulate_pauli_measurements(ket, n_shots):
     """
     Simulate finite-shot projective measurements in the Pauli bases X, Y, Z.
 
-    For each observable O ∈ {X, Y, Z}:
-        - Compute ideal expectation value <O> = Tr(ρ O)
+    For each observable {X, Y, Z}:
+        - Compute ideal expectation value <O> = Tr(rho(O))
         - Use Bernoulli sampling with:
               P(+1) = (1 + <O>) / 2
               P(-1) = (1 - <O>) / 2
         - Estimate empirical mean over n_shots.
 
-    Returns:
-        (
-          X_mean, Y_mean, Z_mean,
-          X_ideal, Y_ideal, Z_ideal
-        )
+    Returns: X_mean, Y_mean, Z_mean, X_ideal, Y_ideal, Z_ideal
     """
-    rho = ket * ket.dag()  # density matrix (not strictly needed for 1 qubit but clean)
+    # Density matrix
+    rho = ket * ket.dag()  
 
-    # Ideal expectation values
+    # ! IDEAL ! expectation values (from a random Bloch vector)
     ex_x = float(expect(SIGMA_X, rho))
     ex_y = float(expect(SIGMA_Y, rho))
     ex_z = float(expect(SIGMA_Z, rho))
 
-    # Helper: sample ±1 outcomes for one observable
     def sample_mean_from_expectation(exp_val, shots):
         p_plus = (1.0 + exp_val) / 2.0
+        
         # Draw shots in {+1, -1}
-        outcomes = np.where(
-            np.random.rand(shots) < p_plus,
-            1.0,
-            -1.0,
-        )
-        return outcomes.mean()
+        outcomes = []
 
-    # Empirical means from finite shots
+        for _ in range(shots):
+            if np.random.rand() < p_plus:
+                outcomes.append(1.0)
+            else:
+                outcomes.append(-1.0)
+        return np.mean(outcomes)
+
+    # Empirical means from shots
     x_mean = sample_mean_from_expectation(ex_x, n_shots)
     y_mean = sample_mean_from_expectation(ex_y, n_shots)
     z_mean = sample_mean_from_expectation(ex_z, n_shots)
@@ -117,16 +123,16 @@ def simulate_pauli_measurements(ket, n_shots):
 
 def generate_dataset(n_states, n_shots):
     """
-    Generate a dataset for regression-based quantum state tomography of 1 qubit.
+    Generate a dataset for regression quantum state tomography of 1 qubit.
 
     For each state k:
         - Sample (theta_k, phi_k) uniformly on the Bloch sphere.
         - Build |psi_k>.
         - Simulate measurements in X, Y, Z with n_shots.
         - Store:
-            features:  X_mean, Y_mean, Z_mean
-            targets:   theta, phi, cos_phi, sin_phi
-            extras:    X_ideal, Y_ideal, Z_ideal
+            - X_mean, Y_mean, Z_mean
+            - theta, phi, cos_phi, sin_phi
+            - X_ideal, Y_ideal, Z_ideal
     """
     rows = []
 
@@ -134,17 +140,16 @@ def generate_dataset(n_states, n_shots):
         theta, phi = sample_bloch_angles()
         ket = ket_from_angles(theta, phi)
 
-        (x_mean, y_mean, z_mean,
-         x_ideal, y_ideal, z_ideal) = simulate_pauli_measurements(ket, n_shots)
-
+        (x_mean, y_mean, z_mean, x_ideal, y_ideal, z_ideal) = simulate_pauli_measurements(ket, n_shots)
+        
         row = {
             "X_mean": x_mean,
             "Y_mean": y_mean,
             "Z_mean": z_mean,
-            "theta": theta,
-            "phi": phi,
-            "cos_phi": np.cos(phi),
-            "sin_phi": np.sin(phi),
+            "theta_ideal": theta,
+            "phi_ideal": phi,
+            "cos_phi_ideal": np.cos(phi),
+            "sin_phi_ideal": np.sin(phi),
             "X_ideal": x_ideal,
             "Y_ideal": y_ideal,
             "Z_ideal": z_ideal,
