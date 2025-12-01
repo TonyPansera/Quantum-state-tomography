@@ -19,9 +19,9 @@ from qutip import basis, sigmax, sigmay, sigmaz, expect
 # ----------------------------
 
 N_STATES = 5000        # number of different states on the Bloch sphere
-N_SHOTS = 200          # number of measurement shots per observable (X,Y,Z)
+N_SHOTS = 100          # number of measurement shots per observable (X,Y,Z)
 RANDOM_SEED = 42       # for reproducibility
-OUTPUT_CSV = "../data/qst_regression_dataset.csv"
+OUTPUT_CSV = "../data/qst_mle_dataset_purestates.csv"
 
 
 # ----------------------------
