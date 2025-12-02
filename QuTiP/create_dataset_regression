@@ -18,10 +18,10 @@ from qutip import basis, sigmax, sigmay, sigmaz, expect
 # Global parameters
 # ----------------------------
 
-N_STATES = 5000        # number of different states on the Bloch sphere
-N_SHOTS = 100          # number of measurement shots per observable (X,Y,Z)
+N_STATES = 500        # number of different states on the Bloch sphere
+N_SHOTS = 10          # number of measurement shots per observable (X,Y,Z)
 RANDOM_SEED = 42       # for reproducibility
-OUTPUT_CSV = "../data/qst_mle_dataset_purestates.csv"
+OUTPUT_CSV = "../data/qst_mle_dataset_purestates_unbalanced.csv"
 
 
 # ----------------------------
@@ -49,6 +49,19 @@ def sample_bloch_angles():
     phi = np.random.uniform(0.0, 2.0 * np.pi)
     return theta, phi
 
+def sample_bloch_angles_near_poles(epsilon=0.2):
+    """
+    Sample (theta, phi) with theta around 0 or pi and phi ~ Uniform[0, 2π)
+    """
+    if np.random.rand() < 0.5:
+        # Near the north pole (theta ≈ 0)
+        theta = np.random.uniform(0, epsilon)
+    else:
+        # Near the south pole (theta ≈ π)
+        theta = np.random.uniform(np.pi - epsilon, np.pi)
+    
+    phi = np.random.uniform(0.0, 2.0 * np.pi)
+    return theta, phi
 
 def ket_from_angles(theta, phi):
     """
@@ -137,7 +150,7 @@ def generate_dataset(n_states, n_shots):
     rows = []
 
     for k in range(n_states):
-        theta, phi = sample_bloch_angles()
+        theta, phi = sample_bloch_angles_near_poles()
         ket = ket_from_angles(theta, phi)
 
         (x_mean, y_mean, z_mean, x_ideal, y_ideal, z_ideal) = simulate_pauli_measurements(ket, n_shots)
@@ -150,6 +163,8 @@ def generate_dataset(n_states, n_shots):
             "phi_ideal": phi,
             "cos_phi_ideal": np.cos(phi),
             "sin_phi_ideal": np.sin(phi),
+            "cos_theta_ideal": np.cos(theta),
+            "sin_theta_ideal": np.sin(theta),
             "X_ideal": x_ideal,
             "Y_ideal": y_ideal,
             "Z_ideal": z_ideal,
@@ -163,11 +178,9 @@ def generate_dataset(n_states, n_shots):
 # ----------------------------
 # Main entry point
 # ----------------------------
-
-
 np.random.seed(RANDOM_SEED)
 
-print("Generating dataset for 1-qubit QST regression:")
+print("Generating dataset for 1-qubit QST:")
 print(f"  - Number of states : {N_STATES}")
 print(f"  - Shots per Pauli  : {N_SHOTS}")
 
