@@ -1,52 +1,47 @@
 import numpy as np
 import pandas as pd
 
-
 def generate_qubit_tomography_dataset(
     n_states: int,
     n_shots: int,
-    mode: str = "finite_shots",      # "finite_shots" ou "ideal"
-    include_ideal: bool = True,      # stocker θ, φ et <X,Y,Z> idéaux
-    include_mle: bool = True,        # calculer θ_mle, φ_mle à partir de X_mean,Y_mean,Z_mean
-    include_csv: bool = False,       # éventuellement sauver le DataFrame en CSV
+    mode: str = "finite_shots",      # "finite_shots" : tirages binomiaux ; "ideal" : pas de bruit statistique
+    include_ideal: bool = True,      # stocker theta_ideal, phi_ideal, X_ideal, ...
+    include_mle: bool = True,        # calculer un estimateur MLE optionnel
+    include_csv: bool = False,
     csv_path: str | None = None,
     include_decoherence: bool = False,
-    decoherence_level: float = 0.0,  # probabilité de dépolarisant p \in [0,1]
+    decoherence_level: float = 0.0,  # intensité maximale du shrink
     random_state: int | None = None,
 ) -> pd.DataFrame:
     """
-    Génère un dataset de tomographie quantique pour un qubit.
+    Génère un dataset simulé de tomographie quantique d'un qubit.
 
-    Pour chaque état k = 1..n_states :
-      - Tirage uniforme sur la sphère de Bloch :
-            u = cos(theta) ~ U[-1,1]
-            theta = arccos(u)
-            phi   ~ U[0, 2π]
-      - Etat pur : |ψ> = cos(theta/2)|0> + e^{iφ} sin(theta/2)|1>
-      - Valeurs moyennes idéales (Bloch) :
-            <X> = sin(theta) cos(phi)
-            <Y> = sin(theta) sin(phi)
-            <Z> = cos(theta)
-      - Optionnel : canal dépolarisant de paramètre p = decoherence_level
-            r -> (1-p) r
-      - Mode "ideal" :
-            X_mean, Y_mean, Z_mean = <X>, <Y>, <Z> (après décohérence éventuelle)
-        Mode "finite_shots" :
-            tirage de n_shots valeurs ±1 pour chaque observable,
-            X_mean, Y_mean, Z_mean = moyennes empiriques.
+    PIPELINE PHYSIQUE :
+        état idéal (θ,φ) -> vecteur pur (X_ideal,Y_ideal,Z_ideal)
+        -> (canal de bruit optionnel) -> état RÉEL (X_real,Y_real,Z_real)
+        -> (mesures à n_shots) -> features (X_mean,Y_mean,Z_mean)
+        -> (MLE optionnel)
 
-      - MLE (si include_mle=True) :
-            r = (X_mean, Y_mean, Z_mean)
-            si ||r|| > 1 : r <- r / ||r||        # projection sur la sphère
-            theta_mle = arccos(Z_mle)
-            phi_mle   = atan2(Y_mle, X_mle)
+    ARGUMENTS :
+        mode = "ideal" :
+            - pas de bruit statistique
+            - X_mean = X_real (aucun tirage binomial)
+        mode = "finite_shots" :
+            - tirages ±1 avec probabilité correcte
+            - bruit statistique réel
 
-    Colonnes du DataFrame retourné :
-      - toujours :  X_mean, Y_mean, Z_mean
-      - si include_ideal=True :
-            theta_true, phi_true, X_true, Y_true, Z_true
-      - si include_mle=True :
-            X_mle, Y_mle, Z_mle, theta_mle, phi_mle
+    >>> IMPORTANT POUR LE MACHINE LEARNING <<<
+        - Les FEATURES à utiliser = X_mean, Y_mean, Z_mean.
+        - Les LABELS physiquement corrects = X_real, Y_real, Z_real.
+        - X_ideal,Y_ideal... servent uniquement à l'analyse (pas au ML).
+        - Le MLE N'EST PAS un label et ne doit jamais être utilisé comme tel.
+
+    SORTIE :
+        DataFrame contenant :
+            - Toujours : X_mean, Y_mean, Z_mean (FEATURES)
+            - Toujours : X_real, Y_real, Z_real (LABELS physiques, pour entrainer et à prédire)
+            - Optionnel : valeurs IDEALES (theta_ideal, ...) (si include_ideal, sert pour des graphes)
+            - Optionnel : valeurs MLE (theta_mle, ...) (si include_mle, mais notre but est de comparer ML vs MLE, donc toujours normalement)
     """
 
     rng = np.random.default_rng(random_state)
@@ -59,139 +54,122 @@ def generate_qubit_tomography_dataset(
 
     records = []
 
+    # Fonction interne pour simuler les n_shots
     def simulate_mean(exp_val: float) -> float:
-                # Probabilité P(+1) = (1 + <O>)/2
-                p_plus = 0.5 * (1.0 + exp_val)
-                # Sécurité numérique
-                p_plus = float(np.clip(p_plus, 0.0, 1.0))
-                outcomes = rng.choice([+1.0, -1.0], size=n_shots,
-                                      p=[p_plus, 1.0 - p_plus])
-                return outcomes.mean()
+        p_plus = 0.5 * (1.0 + exp_val)
+        p_plus = float(np.clip(p_plus, 0.0, 1.0))
+        outcomes = rng.choice([+1.0, -1.0], size=n_shots,
+                              p=[p_plus, 1.0 - p_plus])
+        return outcomes.mean()
 
-
+    # Boucle sur les états
     for _ in range(n_states):
-        # 1) Tirage uniforme sur la sphère de Bloch
-        u = rng.uniform(-1.0, 1.0)      # u = cos(theta)
-        theta = np.arccos(u)
-        phi = rng.uniform(0.0, 2.0 * np.pi)
 
-        # 2) Valeurs moyennes idéales <X>, <Y>, <Z> pour l'état pur
-        #    (formules analytiques pour un qubit sur la sphère de Bloch)
-        X_true = np.sin(theta) * np.cos(phi)
-        Y_true = np.sin(theta) * np.sin(phi)
-        Z_true = np.cos(theta)
+        # 1) Tirage uniforme sur la sphère (état idéal)
+        u = rng.uniform(-1.0, 1.0)               # u = cos(theta)
+        theta_ideal = np.arccos(u)
+        phi_ideal = rng.uniform(0.0, 2.0*np.pi)
 
-        # 3) Eventuelle "décohérence" / bruit hardware aléatoire
-    #    Modèle effectif :
-    #    - certains états sont bruités, d'autres non (Bernoulli par état)
-    #    - quand bruité : on réduit la norme du vecteur de Bloch
-    #      avec une force aléatoire, et de manière anisotrope
+        X_ideal = np.sin(theta_ideal) * np.cos(phi_ideal)
+        Y_ideal = np.sin(theta_ideal) * np.sin(phi_ideal)
+        Z_ideal = np.cos(theta_ideal)
+
+        # 2) Application du canal de bruit :
+        #    - shrink anisotrope aléatoire sur (X,Y,Z)
+        #    - garantit que l'état reste physique (||r||<=1)
         if include_decoherence and decoherence_level > 0.0:
-        # probabilité qu'un état soit affecté par le bruit
-            p_state_noisy = decoherence_level  # dans [0,1]
 
-            if rng.uniform() < p_state_noisy:
-            # Etat bruité
-            # force maximale du shrink (0 = pas de bruit, 1 = état complètement mélangé)
-                max_strength = decoherence_level
+            # probabilité qu'un état soit bruité
+            if rng.uniform() < decoherence_level:
 
-            # force de bruit aléatoire pour cet état
-                strength = rng.uniform(0.0, max_strength)
-                base_factor = 1.0 - strength  # facteur moyen de réduction
+                # shrink moyen
+                strength = rng.uniform(0.0, decoherence_level)
+                base_factor = 1.0 - strength
 
-            # anisotropie : chaque observable X, Y, Z a son propre facteur
-            # r_j -> factor_j * r_j, avec factor_j dans [0, 1]
-            # on ajoute un petit jitter multiplicatif pour chaque axe
-                anisotropy = rng.uniform(0.5, 1.5, size=3)  # bruit relatif par axe
-                factors = base_factor * anisotropy
-                factors = np.clip(factors, 0.0, 1.0)        # on ne veut pas amplifier
+                # anisotropie aléatoire axe par axe
+                anisotropy = rng.uniform(0.5, 1.5, size=3)
+                factors = np.clip(base_factor * anisotropy, 0.0, 1.0)
 
-                X_eff = factors[0] * X_true
-                Y_eff = factors[1] * Y_true
-                Z_eff = factors[2] * Z_true
+                X_real = factors[0] * X_ideal
+                Y_real = factors[1] * Y_ideal
+                Z_real = factors[2] * Z_ideal
+
             else:
-            # Etat non bruité
-                X_eff, Y_eff, Z_eff = X_true, Y_true, Z_true
+                X_real, Y_real, Z_real = X_ideal, Y_ideal, Z_ideal
+
         else:
-        # Pas de décohérence
-            X_eff, Y_eff, Z_eff = X_true, Y_true, Z_true
+            X_real, Y_real, Z_real = X_ideal, Y_ideal, Z_ideal
 
-
-        # 4) Simulation des mesures
+        # 3) Simulation des mesures
         if mode == "ideal":
-            # Pas de bruit statistique, uniquement décohérence éventuelle
-            X_mean, Y_mean, Z_mean = X_eff, Y_eff, Z_eff
+            # Pas de fluctuation : features = état réel
+            X_mean, Y_mean, Z_mean = X_real, Y_real, Z_real
 
-        else:  # mode == "finite_shots"
-            
-            X_mean = simulate_mean(X_eff)
-            Y_mean = simulate_mean(Y_eff)
-            Z_mean = simulate_mean(Z_eff)
+        else:
+            # bruit statistique (tirages binomiaux)
+            X_mean = simulate_mean(X_real)
+            Y_mean = simulate_mean(Y_real)
+            Z_mean = simulate_mean(Z_real)
 
-
-
-                # 4bis) Possibilité de "perdre" certaines mesures (NaN)
-        #      Par exemple : la base X n'a pas été mesurée pour cet état, etc.
-        if include_decoherence and decoherence_level > 0.0:
-            # probabilité de perdre une mesure sur un axe donné
-            p_missing = 0.1 * decoherence_level  # on peux ajuster ce facteur qui détermine le taux de NaN
-
-            if rng.uniform() < p_missing:
-                X_mean = np.nan
-            if rng.uniform() < p_missing:
-                Y_mean = np.nan
-            if rng.uniform() < p_missing:
-                Z_mean = np.nan
-
-
-        # 5) Enregistrement de la ligne
+        # 4) Construction du record
         record = {
-            "X_mean": X_mean,
+            "X_mean": X_mean,     # FEATURES
             "Y_mean": Y_mean,
             "Z_mean": Z_mean,
+
+            "X_real": X_real,     # LABELS (état réel)
+            "Y_real": Y_real,
+            "Z_real": Z_real,
         }
 
+        # 5) Ajouter les valeurs idéales
         if include_ideal:
             record.update({
-                "theta_true": theta,
-                "phi_true": phi,
-                "X_true": X_true,
-                "Y_true": Y_true,
-                "Z_true": Z_true,
+                "theta_ideal": theta_ideal,
+                "phi_ideal": phi_ideal,
+                "X_ideal": X_ideal,
+                "Y_ideal": Y_ideal,
+                "Z_ideal": Z_ideal,
             })
 
+        # 6) MLE optionnel
         if include_mle:
             r_vec = np.array([X_mean, Y_mean, Z_mean], dtype=float)
 
-            # Protection explicite : si une mesure est NaN, toute la MLE est NaN
+            # Cas avec NaN (si tu actives une future perte de mesure)
             if np.isnan(r_vec).any():
-                X_mle = Y_mle = Z_mle = np.nan
-                theta_mle = phi_mle = np.nan
+                record.update({
+                    "X_mle": np.nan,
+                    "Y_mle": np.nan,
+                    "Z_mle": np.nan,
+                    "theta_mle": np.nan,
+                    "phi_mle": np.nan,
+                })
             else:
+                # Projection si r_mean dépasse la boule (bruit statistique)
                 r_norm = np.linalg.norm(r_vec)
                 if r_norm > 1.0:
-                    r_vec = r_vec / r_norm
+                    r_vec /= r_norm
 
                 X_mle, Y_mle, Z_mle = r_vec
                 theta_mle = np.arccos(Z_mle)
                 phi_mle = np.arctan2(Y_mle, X_mle)
 
-            record.update({
-                "X_mle": X_mle,
-                "Y_mle": Y_mle,
-                "Z_mle": Z_mle,
-                "theta_mle": theta_mle,
-                "phi_mle": phi_mle,
-            })
+                record.update({
+                    "X_mle": X_mle,
+                    "Y_mle": Y_mle,
+                    "Z_mle": Z_mle,
+                    "theta_mle": theta_mle,
+                    "phi_mle": phi_mle,
+                })
 
         records.append(record)
 
     df = pd.DataFrame.from_records(records)
 
-    # 6) Sauvegarde éventuelle en CSV (optionnelle)
     if include_csv:
         if csv_path is None:
-            csv_path = f"tomography_dataset_n{n_states}_shots{n_shots}.csv"
+            csv_path = f"tomography_dataset_{n_states}_shots{n_shots}.csv"
         df.to_csv(csv_path, index=False)
 
     return df
