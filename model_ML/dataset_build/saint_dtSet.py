@@ -59,6 +59,16 @@ def generate_qubit_tomography_dataset(
 
     records = []
 
+    def simulate_mean(exp_val: float) -> float:
+                # Probabilité P(+1) = (1 + <O>)/2
+                p_plus = 0.5 * (1.0 + exp_val)
+                # Sécurité numérique
+                p_plus = float(np.clip(p_plus, 0.0, 1.0))
+                outcomes = rng.choice([+1.0, -1.0], size=n_shots,
+                                      p=[p_plus, 1.0 - p_plus])
+                return outcomes.mean()
+
+
     for _ in range(n_states):
         # 1) Tirage uniforme sur la sphère de Bloch
         u = rng.uniform(-1.0, 1.0)      # u = cos(theta)
@@ -71,15 +81,41 @@ def generate_qubit_tomography_dataset(
         Y_true = np.sin(theta) * np.sin(phi)
         Z_true = np.cos(theta)
 
-        # 3) Eventuelle décohérence (canal dépolarisant simple)
-        #    ρ -> (1-p) ρ + p I/2  <=>  r -> (1-p) r
+        # 3) Eventuelle "décohérence" / bruit hardware aléatoire
+    #    Modèle effectif :
+    #    - certains états sont bruités, d'autres non (Bernoulli par état)
+    #    - quand bruité : on réduit la norme du vecteur de Bloch
+    #      avec une force aléatoire, et de manière anisotrope
         if include_decoherence and decoherence_level > 0.0:
-            factor = 1.0 - decoherence_level
-            X_eff = factor * X_true
-            Y_eff = factor * Y_true
-            Z_eff = factor * Z_true
+        # probabilité qu'un état soit affecté par le bruit
+            p_state_noisy = decoherence_level  # dans [0,1]
+
+            if rng.uniform() < p_state_noisy:
+            # Etat bruité
+            # force maximale du shrink (0 = pas de bruit, 1 = état complètement mélangé)
+                max_strength = decoherence_level
+
+            # force de bruit aléatoire pour cet état
+                strength = rng.uniform(0.0, max_strength)
+                base_factor = 1.0 - strength  # facteur moyen de réduction
+
+            # anisotropie : chaque observable X, Y, Z a son propre facteur
+            # r_j -> factor_j * r_j, avec factor_j dans [0, 1]
+            # on ajoute un petit jitter multiplicatif pour chaque axe
+                anisotropy = rng.uniform(0.5, 1.5, size=3)  # bruit relatif par axe
+                factors = base_factor * anisotropy
+                factors = np.clip(factors, 0.0, 1.0)        # on ne veut pas amplifier
+
+                X_eff = factors[0] * X_true
+                Y_eff = factors[1] * Y_true
+                Z_eff = factors[2] * Z_true
+            else:
+            # Etat non bruité
+                X_eff, Y_eff, Z_eff = X_true, Y_true, Z_true
         else:
+        # Pas de décohérence
             X_eff, Y_eff, Z_eff = X_true, Y_true, Z_true
+
 
         # 4) Simulation des mesures
         if mode == "ideal":
@@ -87,18 +123,26 @@ def generate_qubit_tomography_dataset(
             X_mean, Y_mean, Z_mean = X_eff, Y_eff, Z_eff
 
         else:  # mode == "finite_shots"
-            def simulate_mean(exp_val: float) -> float:
-                # Probabilité P(+1) = (1 + <O>)/2
-                p_plus = 0.5 * (1.0 + exp_val)
-                # Sécurité numérique
-                p_plus = float(np.clip(p_plus, 0.0, 1.0))
-                outcomes = rng.choice([+1.0, -1.0], size=n_shots,
-                                      p=[p_plus, 1.0 - p_plus])
-                return outcomes.mean()
-
+            
             X_mean = simulate_mean(X_eff)
             Y_mean = simulate_mean(Y_eff)
             Z_mean = simulate_mean(Z_eff)
+
+
+
+                # 4bis) Possibilité de "perdre" certaines mesures (NaN)
+        #      Par exemple : la base X n'a pas été mesurée pour cet état, etc.
+        if include_decoherence and decoherence_level > 0.0:
+            # probabilité de perdre une mesure sur un axe donné
+            p_missing = 0.1 * decoherence_level  # on peux ajuster ce facteur qui détermine le taux de NaN
+
+            if rng.uniform() < p_missing:
+                X_mean = np.nan
+            if rng.uniform() < p_missing:
+                Y_mean = np.nan
+            if rng.uniform() < p_missing:
+                Z_mean = np.nan
+
 
         # 5) Enregistrement de la ligne
         record = {
@@ -118,14 +162,19 @@ def generate_qubit_tomography_dataset(
 
         if include_mle:
             r_vec = np.array([X_mean, Y_mean, Z_mean], dtype=float)
-            r_norm = np.linalg.norm(r_vec)
 
-            if r_norm > 1.0:
-                r_vec = r_vec / r_norm
+            # Protection explicite : si une mesure est NaN, toute la MLE est NaN
+            if np.isnan(r_vec).any():
+                X_mle = Y_mle = Z_mle = np.nan
+                theta_mle = phi_mle = np.nan
+            else:
+                r_norm = np.linalg.norm(r_vec)
+                if r_norm > 1.0:
+                    r_vec = r_vec / r_norm
 
-            X_mle, Y_mle, Z_mle = r_vec
-            theta_mle = np.arccos(Z_mle)
-            phi_mle = np.arctan2(Y_mle, X_mle)
+                X_mle, Y_mle, Z_mle = r_vec
+                theta_mle = np.arccos(Z_mle)
+                phi_mle = np.arctan2(Y_mle, X_mle)
 
             record.update({
                 "X_mle": X_mle,
