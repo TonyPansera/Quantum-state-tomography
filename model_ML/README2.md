@@ -18,7 +18,7 @@ afin d'étudier :
    • la dépendance au nombre de shots,
    • le coût computationnel.
 
-Nous travaillons d’abord sur le cas 1 qubit, avec possibilité d’étendre à 2 qubits plus tard 
+Nous travaillons d’abord sur le cas 1 qubit, avec possibilité d’étendre à plusieurs qubits plus tard 
 (où le MLE devient très coûteux).
 
 ------------------------------------------------------------
@@ -34,7 +34,7 @@ Dans notre simulation, il faut distinguer trois objets :
 (2) ÉTAT RÉEL :
    - l’état effectivement produit AVANT LES MESURES.
    - il peut être :
-       → identique à l’état idéal (si aucun bruit physique même si il y a le bruit statistique ( car l'état reste pure),
+       → identique à l’état idéal (si aucun bruit physique même si il y a le bruit statistique ( car l'état reste pure)),
        → ou contracté par un bruit physique simulé (donc mixte).
    - c’est cet état que les méthodes de tomographie cherchent à reconstruire.
 
@@ -141,3 +141,111 @@ Pour chaque échantillon :
 - Les labels = état réel déterministe (pur ou mixte).  
 - Nous comparons MLE vs ML pour reconstruire cet état réel.  
 
+
+
+# README — LAB0 & LAB1 : Dataset Exploration & Classification (SVC)
+
+Ce document décrit les deux premiers Labs du projet :  
+**Lab0 (exploration du dataset)** et **Lab1 (classification via SVC)**.  
+Ils servent à vérifier la validité physique des données, calibrer le pipeline, et établir des benchmarks avant la tomographie machine learning.
+
+---
+
+# 🎯 Objectifs généraux des Labs 0 et 1
+
+Ces deux Labs permettent de :
+
+- **valider la génération du dataset**,  
+- **explorer les propriétés des données** (plots, statistiques, bruit),  
+- **comprendre le comportement des mesures X/Y/Z**,  
+- **tester les kernels SVC comme premier benchmark ML**,  
+- **vérifier que la chaîne expérimentale simulée fonctionne**,  
+- **préparer les Labs de régression**, qui réaliseront la vraie tomographie ML.
+
+Ces Labs **ne reconstruisent pas encore l’état**.  
+Ils servent de base de calibration, exactement comme dans un laboratoire.
+
+---
+
+# 🟧 LAB 0 — Exploration du Dataset
+
+## 🎯 Objectifs du Lab 0
+
+1. Vérifier que la fonction `generate_dataset` respecte les exigences physiques :
+   - état réel correctement défini,
+   - bruit statistique bien appliqué,
+   - shrink anisotrope gardant l’état physique,
+   - labels cohérents avec l’état réel.
+
+2. Comprendre visuellement la structure des données :
+   - distributions,
+   - effet du bruit statistique,
+   - effet du shrink anisotrope,
+   - structure dans l’espace de Bloch.
+
+3. Fournir des **plots explicatifs** utiles pour le rapport.
+
+4. S’assurer que le dataset est **physiquement sain** avant d’entraîner les modèles.
+
+---
+# LAB 1 — Classification (SVC & kernels)
+## Clarification essentielle : ce que la classification ne peut pas faire
+
+ La classification ne reconstruit pas l’état.
+ Elle ne trouve pas (θ, φ).
+ Elle n’est pas une méthode de tomographie.
+ Elle ne produit pas la matrice de densité.
+
+Elle sert exclusivement à reconnaitre une classe parmi un ensemble d’états discrets.
+
+ Alors à quoi sert la classification ?
+ 1. Benchmark simple pour tester les kernels
+
+SVC permet de comparer :
+
+kernel linéaire
+
+RBF
+
+polynomial
+
+QSVM (si intégré)
+
+2. Vérifier la qualité du dataset
+
+Si la classification échoue → problème dans :
+
+la simulation des mesures,
+
+le bruit,
+
+les features,
+
+les labels.
+
+3. Étudier la robustesse au bruit
+
+On peut mesurer l’impact :
+
+du nombre de shots,
+
+du shrink,
+
+du niveau de décohérence.
+
+# Résumé
+
+Le Lab0 valide la physique du dataset (état réel, shrink, bruit statistique).
+Le Lab1 teste les kernels SVC sur une tâche simple de classification.
+
+La classification n’est PAS une forme de tomographie.
+Elle ne sert pas à trouver (θ, φ) ni à reconstruire la matrice de densité.
+Elle sert à :
+- valider le dataset,
+- comparer les kernels classiques et quantiques,
+- étudier l’effet du bruit,
+- préparer les Labs de régression.
+
+Les Labs suivants (Lab2 et Lab3) traiteront la vraie tomographie :
+→ reconstruction du vecteur de Bloch réel avec ML,
+→ comparaison directe ML vs MLE.
