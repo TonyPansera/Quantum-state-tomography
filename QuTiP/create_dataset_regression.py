@@ -12,16 +12,16 @@ Dataset generator for 1-qubit quantum state tomography (regression).
 
 import numpy as np
 import pandas as pd
-from qutip import basis, sigmax, sigmay, sigmaz, expect
+from qutip import basis, sigmax, sigmay, sigmaz, expect, Qobj
 
 # ----------------------------
 # Global parameters
 # ----------------------------
 
-N_STATES = 500        # number of different states on the Bloch sphere
-N_SHOTS = 10          # number of measurement shots per observable (X,Y,Z)
+N_STATES = 5000        # number of different states on the Bloch sphere
+N_SHOTS = 100          # number of measurement shots per observable (X,Y,Z)
 RANDOM_SEED = 42       # for reproducibility
-OUTPUT_CSV = "../data/qst_mle_dataset_purestates_unbalanced.csv"
+OUTPUT_CSV = "../data/qst_mle_dataset_mixed_states.csv"
 
 
 # ----------------------------
@@ -49,6 +49,29 @@ def sample_bloch_angles():
     phi = np.random.uniform(0.0, 2.0 * np.pi)
     return theta, phi
 
+def sample_bloch_vector():
+    """
+    Sample (theta, phi, r) uniformly to get a qubit state (pure or mixed).
+
+    Sampling rule:
+        u ~ Uniform[-1,1]
+        theta = arccos(u)
+        phi ~ Uniform[0, 2π)
+        r ~ Uniform[0,1]
+    """
+    # We want a direction uniformly distributed on the sphere.
+    # The surface element is: dA = sin(theta) * d(theta) * d(phi)
+    # Therefore theta does NOT have a uniform density: p(theta) proportional to sin(theta)
+    # To obtain the correct law, set u = cos(theta)
+    # Then: du = -sin(theta) * d(theta)  ->  uniform density in u
+    # So sampling u ~ Uniform[-1, 1] gives the correct p(theta)
+    u = np.random.uniform(-1.0, 1.0)
+    theta = np.arccos(u)
+    r = np.random.uniform(0, 1)
+    
+    phi = np.random.uniform(0.0, 2.0 * np.pi)
+    return theta, phi, r
+
 def sample_bloch_angles_near_poles(epsilon=0.2):
     """
     Sample (theta, phi) with theta around 0 or pi and phi ~ Uniform[0, 2π)
@@ -59,6 +82,16 @@ def sample_bloch_angles_near_poles(epsilon=0.2):
     else:
         # Near the south pole (theta ≈ π)
         theta = np.random.uniform(np.pi - epsilon, np.pi)
+    
+    phi = np.random.uniform(0.0, 2.0 * np.pi)
+    return theta, phi
+
+def sample_bloch_angles_outside_poles(epsilon=0.2):
+    """
+    Sample (theta, phi) with theta around 0 or pi and phi ~ Uniform[0, 2π)
+    """
+
+    theta = np.random.uniform(np.pi/2 - epsilon, np.pi/2 + epsilon)
     
     phi = np.random.uniform(0.0, 2.0 * np.pi)
     return theta, phi
@@ -130,6 +163,53 @@ def simulate_pauli_measurements(ket, n_shots):
     return x_mean, y_mean, z_mean, ex_x, ex_y, ex_z
 
 
+def bloch_vector_from_thetaphi_r(theta, phi, r):
+    # theta, phi en radians
+    rx = r * np.sin(theta) * np.cos(phi)
+    ry = r * np.sin(theta) * np.sin(phi)
+    rz = r * np.cos(theta)
+    return np.array([rx, ry, rz])
+
+def simulate_pauli_measurements_mixed_states(theta, phi, r, n_shots):
+    # Density matrix
+    rho00 = 0.5 * (1 + r * np.cos(theta))
+    rho11 = 0.5 * (1 - r * np.cos(theta))
+    rho01 = 0.5 * (r * np.sin(theta) * np.exp(-1j * phi))
+    rho10 = np.conjugate(rho01)
+    
+    rho_mat = np.array([
+        [rho00, rho01],
+        [rho10, rho11]
+    ], dtype=complex)
+    
+    rho = Qobj(rho_mat)
+
+    # ! IDEAL ! expectation values (from a random Bloch vector)
+    ex_x = float(expect(SIGMA_X, rho))
+    ex_y = float(expect(SIGMA_Y, rho))
+    ex_z = float(expect(SIGMA_Z, rho))
+
+    def sample_mean_from_expectation(exp_val, shots):
+        p_plus = (1.0 + exp_val) / 2.0
+        
+        # Draw shots in {+1, -1}
+        outcomes = []
+
+        for _ in range(shots):
+            if np.random.rand() < p_plus:
+                outcomes.append(1.0)
+            else:
+                outcomes.append(-1.0)
+        return np.mean(outcomes)
+
+    # Empirical means from shots
+    x_mean = sample_mean_from_expectation(ex_x, n_shots)
+    y_mean = sample_mean_from_expectation(ex_y, n_shots)
+    z_mean = sample_mean_from_expectation(ex_z, n_shots)
+
+    return x_mean, y_mean, z_mean, ex_x, ex_y, ex_z
+
+
 # ----------------------------
 # Dataset generation
 # ----------------------------
@@ -150,10 +230,9 @@ def generate_dataset(n_states, n_shots):
     rows = []
 
     for k in range(n_states):
-        theta, phi = sample_bloch_angles_near_poles()
-        ket = ket_from_angles(theta, phi)
+        theta, phi, r = sample_bloch_vector()
 
-        (x_mean, y_mean, z_mean, x_ideal, y_ideal, z_ideal) = simulate_pauli_measurements(ket, n_shots)
+        (x_mean, y_mean, z_mean, x_ideal, y_ideal, z_ideal) = simulate_pauli_measurements_mixed_states(theta, phi, r, n_shots)
         
         row = {
             "X_mean": x_mean,
@@ -161,6 +240,7 @@ def generate_dataset(n_states, n_shots):
             "Z_mean": z_mean,
             "theta_ideal": theta,
             "phi_ideal": phi,
+            "r_ideal": r,
             "cos_phi_ideal": np.cos(phi),
             "sin_phi_ideal": np.sin(phi),
             "cos_theta_ideal": np.cos(theta),
