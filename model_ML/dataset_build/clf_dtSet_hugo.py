@@ -297,7 +297,8 @@ import pandas as pd
 
 def build_purity_classification_dataset(
     n_states_total: int,
-    mixed_proportion: float,
+    n_shots: int,
+    mixed_proportion: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     """
     Construit un dataset pour la classification binaire "état pur vs état mixte".
@@ -309,8 +310,7 @@ def build_purity_classification_dataset(
         - la proportion cible d'états mixtes (mixed_proportion).
 
     CHOIX PHYSIQUES IMPOSES (non paramétrables ici) :
-        - n_shots                 : 1000  (nombre de mesures par observable),
-        - mode de mesure          : "ideal" (pas de bruit statistique),
+        - mode de mesure          : "finite_shots" (bruit statistique simulé),
         - include_ideal           : True  (on garde les valeurs idéales pour analyse),
         - include_decoherence     : True  (on active la décohérence),
         - decoherence_level       : 0.6   (force typique du canal de bruit),
@@ -325,17 +325,17 @@ def build_purity_classification_dataset(
         3) Définit un label "pur vs mixte" à partir de ce rayon :
                état pur   : r_real >= 1 - eps_purity
                état mixte : r_real <  1 - eps_purity
-        4) Construit un dataset de classification en respectant AU MIEUX
-           la proportion cible mixed_proportion (0 < mixed_proportion < 1).
-           La taille effective peut être légèrement inférieure à n_states_total
-           si la simulation ne produit pas assez d'états purs ou mixtes pour
-           respecter exactement la proportion.
+        4) Sélectionne les samples pour respecter la proportion cible mixed_proportion.
+           Le dataset final contient EXACTEMENT n_states_total lignes.
 
     Paramètres
     ----------
     n_states_total : int
-        Nombre total d'états à générer AVANT équilibrage des classes.
-        La taille finale du dataset sera inférieure ou égale à cette valeur.
+        Nombre total d'états à générer. La taille du dataset final sera EXACTEMENT
+        égale à cette valeur.
+    n_shots : int
+        Nombre de mesures par observable (X, Y, Z). Plus n_shots est grand,
+        plus le bruit statistique sur X_mean, Y_mean, Z_mean est faible.
     mixed_proportion : float in (0,1)
         Proportion CIBLE d'états mixtes dans le dataset final.
         Exemple :
@@ -345,15 +345,16 @@ def build_purity_classification_dataset(
     Retour
     ------
     df_clf : pd.DataFrame
-        DataFrame complet contenant :
-            - X_real, Y_real, Z_real   : composantes de l'état réel (features),
-            - bloch_radius_real        : norme du vecteur de Bloch réel (feature),
-            - is_pure                  : booléen (True = pur, False = mixte) (feature),
-            - theta_ideal, phi_ideal, X_ideal, Y_ideal, Z_ideal : valeurs idéales (analyse),
-            - label_purity             : int (1 = pur, 0 = mixte) (label à prédire).
+        DataFrame complet contenant exactement n_states_total lignes :
+            - X_mean, Y_mean, Z_mean   : moyennes mesurées (features principales),
+            - X_real, Y_real, Z_real   : composantes de l'état réel,
+            - (theta_ideal, phi_ideal, X_ideal, Y_ideal, Z_ideal) si utiles,
+            - bloch_radius_real        : norme du vecteur de Bloch réel,
+            - is_pure                  : booléen (True = pur, False = mixte),
+            - label_purity             : int (1 = pur, 0 = mixte).
     X : pd.DataFrame
         Sous-DataFrame des features pour la classification :
-            colonnes ["X_real", "Y_real", "Z_real", "bloch_radius_real", "is_pure"].
+            colonnes ["X_mean", "Y_mean", "Z_mean"].
     y : pd.Series
         Série des labels (0/1) correspondants à "label_purity".
 
@@ -371,28 +372,35 @@ def build_purity_classification_dataset(
         raise ValueError("mixed_proportion doit être strictement entre 0 et 1.")
 
     # Paramètres internes FIXES (choix physiques)
-    N_SHOTS = 1000
-    MODE = "ideal"
+    MODE = "finite_shots"
     INCLUDE_IDEAL = True
     INCLUDE_DECOHERENCE = True
     DECOHERENCE_LEVEL = 0.6
     EPS_PURITY = 1e-2
     LABEL_COL = "label_purity"
-    FEATURE_COLS = ["X_real", "Y_real", "Z_real", "bloch_radius_real", "is_pure"]
+
+    # Nombre d'états mixtes et purs CIBLE (pour respecter mixed_proportion)
+    n_mixed_target = int(np.round(mixed_proportion * n_states_total))
+    n_pure_target = n_states_total - n_mixed_target
+
+    # On génère bien plus d'états que nécessaire pour avoir un bon pool
+    # à sélectionner (facteur de 2 de sécurité)
+    oversample_factor = 2
+    n_states_oversample = n_states_total * oversample_factor
 
     # ----------------------------------------------------------------------
-    # 1) Génération d'un dataset de base avec décohérence
+    # 1) Génération d'un dataset de base avec décohérence (sursampling)
     # ----------------------------------------------------------------------
     df_base = generate_qubit_tomography_dataset_base(
-        n_states=n_states_total,
-        n_shots=N_SHOTS,
+        n_states=n_states_oversample,
+        n_shots=n_shots,
         mode=MODE,
         include_ideal=INCLUDE_IDEAL,
         include_csv=False,
         csv_path=None,
         include_decoherence=INCLUDE_DECOHERENCE,
         decoherence_level=DECOHERENCE_LEVEL,
-        random_state=None,  # aléatoire
+        random_state=None,
     )
 
     # ----------------------------------------------------------------------
@@ -414,7 +422,8 @@ def build_purity_classification_dataset(
     df_base[LABEL_COL] = df_base["is_pure"].astype(int)
 
     # ----------------------------------------------------------------------
-    # 3) Construction d'un dataset avec la proportion cible mixed_proportion
+    # 3) Sélection des samples pour obtenir EXACTEMENT n_states_total lignes
+    #    avec la proportion mixed_proportion
     # ----------------------------------------------------------------------
     df_pure  = df_base[df_base[LABEL_COL] == 1]
     df_mixte = df_base[df_base[LABEL_COL] == 0]
@@ -422,6 +431,7 @@ def build_purity_classification_dataset(
     n_pure_available  = len(df_pure)
     n_mixed_available = len(df_mixte)
 
+    # Vérification qu'on a au moins un exemple de chaque classe
     if n_pure_available == 0 or n_mixed_available == 0:
         raise ValueError(
             "La simulation n'a pas produit suffisamment d'états des deux types "
@@ -429,33 +439,18 @@ def build_purity_classification_dataset(
             "Augmente n_states_total ou ajuste les paramètres internes."
         )
 
-    # Nombre CIBLE d'états mixtes et purs, avant ajustement
-    target_mixed = mixed_proportion * n_states_total
-    target_pure  = (1.0 - mixed_proportion) * n_states_total
-
-    # On calcule un facteur d'échelle pour ne pas demander plus
-    # d'états que ce que la simulation a produit.
-    scale = min(
-        n_mixed_available / target_mixed,
-        n_pure_available  / target_pure,
-        1.0
-    )
-
-    # Nombres EFFECTIFS à prélever dans chaque classe
-    n_mixed = int(target_mixed * scale)
-    n_pure  = int(target_pure  * scale)
-
-    # Sécurité minimale
-    if n_mixed == 0 or n_pure == 0:
+    # Vérification qu'on a assez d'états de chaque type
+    if n_pure_available < n_pure_target or n_mixed_available < n_mixed_target:
         raise ValueError(
-            "Impossible de construire un dataset respectant la proportion voulue "
-            "avec au moins un exemple de chaque classe. "
-            f"(après ajustement : n_mixed={n_mixed}, n_pure={n_pure})"
+            f"La simulation n'a pas produit assez d'états pour respecter la proportion. "
+            f"Demandé: {n_pure_target} purs et {n_mixed_target} mixtes. "
+            f"Disponible: {n_pure_available} purs et {n_mixed_available} mixtes. "
+            "Augmente n_states_total."
         )
 
-    # Échantillonnage aléatoire dans chaque pool
-    df_mixte_sample = df_mixte.sample(n=n_mixed, random_state=None)
-    df_pure_sample  = df_pure.sample(n=n_pure,  random_state=None)
+    # Échantillonnage aléatoire pour obtenir exactement le nombre d'états voulu
+    df_pure_sample = df_pure.sample(n=n_pure_target, random_state=None)
+    df_mixte_sample = df_mixte.sample(n=n_mixed_target, random_state=None)
 
     # Concaténation
     df_clf = pd.concat([df_pure_sample, df_mixte_sample], ignore_index=True)
@@ -463,10 +458,13 @@ def build_purity_classification_dataset(
     # Mélange final pour casser tout ordre structurel
     df_clf = df_clf.sample(frac=1.0, random_state=None).reset_index(drop=True)
 
+    # Vérification finale
+    assert len(df_clf) == n_states_total, f"Le dataset a {len(df_clf)} lignes au lieu de {n_states_total}"
+
     # ----------------------------------------------------------------------
     # 4) Séparation features / labels pour le ML
     # ----------------------------------------------------------------------
-    X = df_clf[FEATURE_COLS].copy()
+    X = df_clf[["X_mean", "Y_mean", "Z_mean","bloch_radius_real"]].copy()
     y = df_clf[LABEL_COL].copy()
 
     return df_clf, X, y
