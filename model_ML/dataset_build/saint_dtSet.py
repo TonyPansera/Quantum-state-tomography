@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
-
+from scipy.optimize import minimize
+import time
 
 # ---------------------------------------------------------------------------
 # 1) Génération du dataset de tomographie (SANS MLE)
@@ -64,6 +65,8 @@ def generate_qubit_tomography_dataset_base(
             - X_real, Y_real, Z_real (labels continus, état réel)
             - (optionnel) theta_ideal, phi_ideal, X_ideal, Y_ideal, Z_ideal
         -> Pas de colonnes MLE ici.
+
+    !!! Sauvegarde n_shots dans les métadonnées du DataFrame. car c'est utilisé par le MLE !!!
     """
 
     rng = np.random.default_rng(random_state)
@@ -170,6 +173,9 @@ def generate_qubit_tomography_dataset_base(
             "X_real": X_real,
             "Y_real": Y_real,
             "Z_real": Z_real,
+            # On ajoute n_shots dans chaque ligne pour la sécurité, 
+            # ou on peut l'avoir juste en attribut, mais par ligne c'est plus sûr pour le concat
+            "n_shots_sim": n_shots
         }
 
         # 5) Option : on stocke aussi les valeurs idéales
@@ -189,6 +195,8 @@ def generate_qubit_tomography_dataset_base(
     # ----------------------------------------------------------------------
     df = pd.DataFrame.from_records(records)
 
+    # Sécurité supplémentaire : on attache n_shots aux attributs du dataframe
+    df.attrs['n_shots'] = n_shots
     # Option : sauvegarde en CSV
     if include_csv:
         if csv_path is None:
@@ -199,101 +207,88 @@ def generate_qubit_tomography_dataset_base(
 
 
 # ---------------------------------------------------------------------------
-# 2) Fonction séparée : calcul des colonnes MLE à partir de X_mean, Y_mean, Z_mean
+# 2) Fonction MLE Optimisée (Maximum Likelihood Estimation)
 # ---------------------------------------------------------------------------
 
-def add_mle_from_means(
-    df: pd.DataFrame,
-    projection_on_bloch_ball: bool = True,
-) -> pd.DataFrame:
+def perform_mle_tomography(df_input: pd.DataFrame, n_shots: int = None) -> tuple[pd.DataFrame, float]:
     """
-    Calcule et ajoute les colonnes MLE (X_mle, Y_mle, Z_mle, theta_mle, phi_mle)
-    à un DataFrame issu de `generate_qubit_tomography_dataset_base`.
-
-    Hypothèse :
-        - df contient les colonnes "X_mean", "Y_mean", "Z_mean".
-        - Ces colonnes sont les moyennes expérimentales des observables de Pauli.
-
-    Idée :
-        - Pour un qubit, l'estimateur MLE simple consiste à prendre le vecteur
-          des moyennes (X_mean, Y_mean, Z_mean), puis éventuellement à le
-          projeter dans la boule de Bloch (norme <= 1).
-        - On convertit ensuite ce vecteur (X_mle, Y_mle, Z_mle) en
-          coordonnées sphériques (theta_mle, phi_mle).
-
-    Paramètres
-    ----------
-    df : pd.DataFrame
-        DataFrame d'entrée. Il n'est pas modifié sur place (on travaille sur une copie).
-    projection_on_bloch_ball : bool
-        Si True, on projette les vecteurs qui dépassent la norme 1
-        (résultat du bruit statistique) sur la sphère de rayon 1.
-
-    Retour
-    ------
-    df_out : pd.DataFrame
-        Copie de df, avec colonnes supplémentaires :
-            - X_mle, Y_mle, Z_mle
-            - theta_mle, phi_mle
-
-        Pour les lignes où (X_mean, Y_mean, Z_mean) contiennent un NaN,
-        toutes les colonnes MLE sont mises à NaN.
+    Applique le MLE sur le dataset.
+    Détecte automatiquement n_shots si présent dans le dataframe.
     """
+    # 1. Gestion automatique de n_shots
+    if n_shots is None:
+        if 'n_shots' in df_input.attrs:
+            n_shots = df_input.attrs['n_shots']
+        elif 'n_shots_sim' in df_input.columns:
+            # On prend la valeur de la première ligne (supposée constante)
+            n_shots = int(df_input['n_shots_sim'].iloc[0])
+        else:
+            raise ValueError("n_shots non fourni et introuvable dans le DataFrame. Veuillez spécifier l'argument n_shots.")
 
-    # On travaille sur une copie pour éviter de modifier df in-place
-    df_out = df.copy()
+    # --- Fonctions internes MLE ---
+    def bloch_from_angles(theta, phi):
+        return np.sin(theta)*np.cos(phi), np.sin(theta)*np.sin(phi), np.cos(theta)
 
-    # Récupération des vecteurs de moyennes sous forme de tableau NumPy
-    r_means = df_out[["X_mean", "Y_mean", "Z_mean"]].to_numpy(dtype=float)
+    def angles_from_bloch(nx, ny, nz):
+        norm = np.sqrt(nx**2 + ny**2 + nz**2)
+        if norm == 0: return 0.0, 0.0
+        nx, ny, nz = nx/norm, ny/norm, nz/norm
+        theta = np.arccos(np.clip(nz, -1.0, 1.0))
+        phi = np.arctan2(ny, nx)
+        return theta, (phi + 2*np.pi) % (2*np.pi)
 
-    # Masque des lignes contenant au moins un NaN dans X_mean, Y_mean ou Z_mean
-    mask_nan = np.isnan(r_means).any(axis=1)
+    def neg_log_likelihood(params, n_x, n_y, n_z, N):
+        theta, phi = params
+        nx, ny, nz = bloch_from_angles(theta, phi)
+        # Proba théorique
+        px, py, pz = (1+nx)/2, (1+ny)/2, (1+nz)/2
+        # Clipping de sécurité
+        eps = 1e-12
+        px, py, pz = np.clip([px, py, pz], eps, 1-eps)
+        # NLL
+        ll = (n_x*np.log(px) + (N-n_x)*np.log(1-px) +
+              n_y*np.log(py) + (N-n_y)*np.log(1-py) +
+              n_z*np.log(pz) + (N-n_z)*np.log(1-pz))
+        return -ll
 
-    # Pour éviter des problèmes dans le calcul des normes, on remplace
-    # temporairement les NaN par 0. Ils seront remis à NaN plus tard.
-    r_means_safe = r_means.copy()
-    r_means_safe[mask_nan] = 0.0
+    # --- Exécution ---
+    df_result = df_input.copy()
+    start_time = time.time()
+    
+    # Recalcul des comptes (counts)
+    if "numberX" not in df_result.columns:
+        df_result["numberX"] = ((1 + df_result["X_mean"]) / 2.0 * n_shots).round().astype(int)
+        df_result["numberY"] = ((1 + df_result["Y_mean"]) / 2.0 * n_shots).round().astype(int)
+        df_result["numberZ"] = ((1 + df_result["Z_mean"]) / 2.0 * n_shots).round().astype(int)
 
-    # Norme de chaque vecteur
-    norms = np.linalg.norm(r_means_safe, axis=1)
+    theta_mle_list, phi_mle_list = [], []
+    bounds = [(0.0, np.pi), (0.0, 2.0 * np.pi)]
 
-    # Option : projection dans la boule de Bloch si la norme dépasse 1
-    if projection_on_bloch_ball:
-        mask_outside = norms > 1.0
-        # On normalise uniquement les vecteurs qui dépassent la sphère
-        r_means_safe[mask_outside] = (
-            r_means_safe[mask_outside] / norms[mask_outside, None]
+    for _, row in df_result.iterrows():
+        # Point de départ : inversion linéaire
+        t0, p0 = angles_from_bloch(row["X_mean"], row["Y_mean"], row["Z_mean"])
+        
+        # Optimisation
+        res = minimize(
+            neg_log_likelihood, 
+            x0=[t0, p0], 
+            args=(row["numberX"], row["numberY"], row["numberZ"], n_shots),
+            bounds=bounds, 
+            method="L-BFGS-B"
         )
-        # Après projection, la norme est 1 pour ces vecteurs
-        norms[mask_outside] = 1.0
+        theta_mle_list.append(res.x[0])
+        phi_mle_list.append(res.x[1] % (2*np.pi))
 
-    # Les composantes MLE sont simplement les composantes de r_means_safe
-    X_mle = r_means_safe[:, 0]
-    Y_mle = r_means_safe[:, 1]
-    Z_mle = r_means_safe[:, 2]
-
-    # Conversion en coordonnées sphériques :
-    # theta = arccos(z), phi = atan2(y, x)
-    # On clippe Z_mle dans [-1,1] pour éviter les erreurs numériques.
-    Z_clipped = np.clip(Z_mle, -1.0, 1.0)
-    theta_mle = np.arccos(Z_clipped)
-    phi_mle = np.arctan2(Y_mle, X_mle)
-
-    # On enregistre d'abord les valeurs calculées
-    df_out["X_mle"] = X_mle
-    df_out["Y_mle"] = Y_mle
-    df_out["Z_mle"] = Z_mle
-    df_out["theta_mle"] = theta_mle
-    df_out["phi_mle"] = phi_mle
-
-    # Puis on remet à NaN les lignes qui avaient des NaN en entrée
-    df_out.loc[mask_nan, ["X_mle", "Y_mle", "Z_mle", "theta_mle", "phi_mle"]] = np.nan
-
-    return df_out
-
-import numpy as np
-import pandas as pd
-
+    end_time = time.time()
+    
+    df_result["theta_mle"] = theta_mle_list
+    df_result["phi_mle"] = phi_mle_list
+    
+    # Conversion en cartésien pour comparaison facile
+    nx, ny, nz = bloch_from_angles(np.array(theta_mle_list), np.array(phi_mle_list))
+    df_result["X_mle"], df_result["Y_mle"], df_result["Z_mle"] = nx, ny, nz
+    
+    return df_result, (end_time - start_time)
 
 def build_purity_classification_dataset(
     n_states_total: int,
