@@ -291,9 +291,6 @@ def add_mle_from_means(
 
     return df_out
 
-import numpy as np
-import pandas as pd
-
 
 def build_purity_classification_dataset(
     n_states_total: int,
@@ -385,7 +382,7 @@ def build_purity_classification_dataset(
 
     # On génère bien plus d'états que nécessaire pour avoir un bon pool
     # à sélectionner (facteur de 2 de sécurité)
-    oversample_factor = 2
+    oversample_factor = 3
     n_states_oversample = n_states_total * oversample_factor
 
     # ----------------------------------------------------------------------
