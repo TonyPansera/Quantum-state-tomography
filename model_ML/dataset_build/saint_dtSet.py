@@ -206,88 +206,125 @@ def generate_qubit_tomography_dataset_base(
     return df
 
 
-# ---------------------------------------------------------------------------
-# 2) Fonction MLE Optimisée (Maximum Likelihood Estimation)
-# ---------------------------------------------------------------------------
+
 
 def perform_mle_tomography(df_input: pd.DataFrame, n_shots: int = None) -> tuple[pd.DataFrame, float]:
     """
-    Applique le MLE sur le dataset.
-    Détecte automatiquement n_shots si présent dans le dataframe.
+    Applique le MLE pour reconstruire la matrice densité rho.
+    Supporte les états mixtes (r <= 1).
     """
+    
     # 1. Gestion automatique de n_shots
     if n_shots is None:
         if 'n_shots' in df_input.attrs:
             n_shots = df_input.attrs['n_shots']
         elif 'n_shots_sim' in df_input.columns:
-            # On prend la valeur de la première ligne (supposée constante)
             n_shots = int(df_input['n_shots_sim'].iloc[0])
         else:
-            raise ValueError("n_shots non fourni et introuvable dans le DataFrame. Veuillez spécifier l'argument n_shots.")
+            raise ValueError("n_shots non trouvé.")
 
-    # --- Fonctions internes MLE ---
-    def bloch_from_angles(theta, phi):
-        return np.sin(theta)*np.cos(phi), np.sin(theta)*np.sin(phi), np.cos(theta)
+    # --- Matrices de Pauli ---
+    sigma_x = np.array([[0, 1], [1, 0]], dtype=complex)
+    sigma_y = np.array([[0, -1j], [1j, 0]], dtype=complex)
+    sigma_z = np.array([[1, 0], [0, -1]], dtype=complex)
+    
+    # Projecteurs de mesure (+1) pour X, Y, Z
+    # P_i+ = (I + sigma_i) / 2
+    I = np.eye(2, dtype=complex)
+    Proj_X = (I + sigma_x) / 2.0
+    Proj_Y = (I + sigma_y) / 2.0
+    Proj_Z = (I + sigma_z) / 2.0
 
-    def angles_from_bloch(nx, ny, nz):
-        norm = np.sqrt(nx**2 + ny**2 + nz**2)
-        if norm == 0: return 0.0, 0.0
-        nx, ny, nz = nx/norm, ny/norm, nz/norm
-        theta = np.arccos(np.clip(nz, -1.0, 1.0))
-        phi = np.arctan2(ny, nx)
-        return theta, (phi + 2*np.pi) % (2*np.pi)
-
-    def neg_log_likelihood(params, n_x, n_y, n_z, N):
-        theta, phi = params
-        nx, ny, nz = bloch_from_angles(theta, phi)
-        # Proba théorique
-        px, py, pz = (1+nx)/2, (1+ny)/2, (1+nz)/2
-        # Clipping de sécurité
-        eps = 1e-12
-        px, py, pz = np.clip([px, py, pz], eps, 1-eps)
-        # NLL
-        ll = (n_x*np.log(px) + (N-n_x)*np.log(1-px) +
-              n_y*np.log(py) + (N-n_y)*np.log(1-py) +
-              n_z*np.log(pz) + (N-n_z)*np.log(1-pz))
+    # --- Fonction de coût (NLL) ---
+    def nll_rho(t_params, n_x, n_y, n_z, N):
+        # 1. Reconstruire T à partir de 4 paramètres réels (Cholesky)
+        # T = [[t0, 0], [t1 + i*t2, t3]]
+        t0, t1, t2, t3 = t_params
+        T = np.array([[t0, 0], [t1 + 1j*t2, t3]], dtype=complex)
+        
+        # 2. rho = T† T / Tr(T† T)
+        rho_un = T.conj().T @ T
+        norm = np.trace(rho_un).real
+        rho = rho_un / norm
+        
+        # 3. Probabilités théoriques p = Tr(rho * Proj)
+        px = np.trace(rho @ Proj_X).real
+        py = np.trace(rho @ Proj_Y).real
+        pz = np.trace(rho @ Proj_Z).real
+        
+        # 4. Clipping de sécurité
+        eps = 1e-9
+        px = np.clip(px, eps, 1-eps)
+        py = np.clip(py, eps, 1-eps)
+        pz = np.clip(pz, eps, 1-eps)
+        
+        # 5. Log-vraisemblance
+        ll = (n_x * np.log(px) + (N - n_x) * np.log(1 - px) +
+              n_y * np.log(py) + (N - n_y) * np.log(1 - py) +
+              n_z * np.log(pz) + (N - n_z) * np.log(1 - pz))
+        
         return -ll
 
     # --- Exécution ---
     df_result = df_input.copy()
-    start_time = time.time()
     
-    # Recalcul des comptes (counts)
+    # Recalcul des comptes
     if "numberX" not in df_result.columns:
         df_result["numberX"] = ((1 + df_result["X_mean"]) / 2.0 * n_shots).round().astype(int)
         df_result["numberY"] = ((1 + df_result["Y_mean"]) / 2.0 * n_shots).round().astype(int)
         df_result["numberZ"] = ((1 + df_result["Z_mean"]) / 2.0 * n_shots).round().astype(int)
 
-    theta_mle_list, phi_mle_list = [], []
-    bounds = [(0.0, np.pi), (0.0, 2.0 * np.pi)]
+    # Listes pour stocker les résultats
+    x_mle, y_mle, z_mle = [], [], []
+    
+    start_time = time.time()
 
     for _, row in df_result.iterrows():
-        # Point de départ : inversion linéaire
-        t0, p0 = angles_from_bloch(row["X_mean"], row["Y_mean"], row["Z_mean"])
+        # Initialisation naïve : T = Identité (rho = I/2 = état maximalement mixte)
+        # C'est un point de départ sûr pour l'optimiseur.
+        t_init = [1.0, 0.0, 0.0, 1.0]
         
         # Optimisation
         res = minimize(
-            neg_log_likelihood, 
-            x0=[t0, p0], 
+            nll_rho,
+            x0=t_init,
             args=(row["numberX"], row["numberY"], row["numberZ"], n_shots),
-            bounds=bounds, 
-            method="L-BFGS-B"
+            method="Nelder-Mead" # Nelder-Mead est souvent plus robuste pour ce landscape non-convexe
         )
-        theta_mle_list.append(res.x[0])
-        phi_mle_list.append(res.x[1] % (2*np.pi))
+        
+        # Reconstruction de la matrice rho finale
+        t0, t1, t2, t3 = res.x
+        T = np.array([[t0, 0], [t1 + 1j*t2, t3]], dtype=complex)
+        rho_final = (T.conj().T @ T) / np.trace(T.conj().T @ T)
+        
+        # Extraction des coordonnées de Bloch (x, y, z) depuis la matrice densité
+        # r_i = Tr(rho * sigma_i)
+        rx_val = np.trace(rho_final @ sigma_x).real
+        ry_val = np.trace(rho_final @ sigma_y).real
+        rz_val = np.trace(rho_final @ sigma_z).real
+        
+        x_mle.append(rx_val)
+        y_mle.append(ry_val)
+        z_mle.append(rz_val)
 
     end_time = time.time()
     
-    df_result["theta_mle"] = theta_mle_list
-    df_result["phi_mle"] = phi_mle_list
+    # Sauvegarde
+    df_result["X_mle"] = x_mle
+    df_result["Y_mle"] = y_mle
+    df_result["Z_mle"] = z_mle
     
-    # Conversion en cartésien pour comparaison facile
-    nx, ny, nz = bloch_from_angles(np.array(theta_mle_list), np.array(phi_mle_list))
-    df_result["X_mle"], df_result["Y_mle"], df_result["Z_mle"] = nx, ny, nz
+    # Calcul des angles MLE a posteriori (optionnel, pour compatibilité)
+    # r = sqrt(x^2 + y^2 + z^2), theta, phi
+    r_mle = np.sqrt(np.array(x_mle)**2 + np.array(y_mle)**2 + np.array(z_mle)**2)
+    # Clip pour éviter les erreurs d'arrondi sur arccos
+    z_mle_norm = np.array(z_mle) / np.clip(r_mle, 1e-9, None) 
     
+    df_result["theta_mle"] = np.arccos(np.clip(z_mle_norm, -1.0, 1.0))
+    df_result["phi_mle"] = np.arctan2(y_mle, x_mle)
+    df_result["phi_mle"] = df_result["phi_mle"].apply(lambda p: p + 2*np.pi if p < 0 else p)
+    df_result["r_mle"] = r_mle
+
     return df_result, (end_time - start_time)
 
 def build_purity_classification_dataset(
