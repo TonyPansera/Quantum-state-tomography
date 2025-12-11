@@ -15,3 +15,7 @@ probs = sampler.probs()['results']  # Ask for the exact probabilities
 
 print(f"Samples: {samples}")
 print(f"Probabilities: {probs}")
+
+
+
+import pandas as pd
