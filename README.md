@@ -1,15 +1,7 @@
 # Quantum-state-tomography
 
-<<<<<<< ours
-Libraries : 
-Qutip
 Quantum State Tomography (QST) seeks to reconstruct an unknown quantum state from measurement data. This repository explores QST with classical and quantum-inspired machine-learning methods, comparing approaches such as variational circuits, kernel methods, and supervised learning baselines.
 
-https://www.overleaf.com/6514264713mxcfbqkffgsx#2bd943
-=======
-Quantum State Tomography (QST) seeks to reconstruct an unknown quantum state from measurement data. This repository explores QST with classical and quantum-inspired machine-learning methods, comparing approaches such as variational circuits, kernel methods, and supervised learning baselines.
-
->>>>>>> theirs
 ## Repository layout
 - **`depot_final_propre/`** — main project code and experiments. Explore these notebooks to see the implemented pipelines and results (Maximum Likelihood Estimation, variational quantum circuits with DNN heads, regression baselines, classification workflows, and quantum kernels).
   - `notebook_MLE`
