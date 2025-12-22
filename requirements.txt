@@ -1,6 +1,5 @@
 ipykernel
 python-dotenv
 pandas
-perceval-quandela
 numpy
 matplotlib
