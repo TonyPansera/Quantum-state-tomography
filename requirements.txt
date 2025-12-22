@@ -3,3 +3,12 @@ python-dotenv
 pandas
 numpy
 matplotlib
+scipy
+seaborn
+scikit-learn
+imbalanced-learn
+torch
+pennylane
+qiskit
+qiskit-machine-learning
+qutip
