@@ -24,3 +24,6 @@ Quantum State Tomography (QST) seeks to reconstruct an unknown quantum state fro
 
 ## Documentation
 Consult the PDFs in `reports/` for definitions, background on quantum computing, and the final machine-learning report that summarizes experimental findings.
+
+## Video presentation
+The video presentation can be found here: https://youtu.be/aiPrkGvkUb8
