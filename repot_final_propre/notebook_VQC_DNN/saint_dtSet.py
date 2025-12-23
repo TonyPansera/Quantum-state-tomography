@@ -3,9 +3,9 @@ import pandas as pd
 from scipy.optimize import minimize
 import time
 
-# ---------------------------------------------------------------------------
-# 1) Génération du dataset de tomographie (SANS MLE)
-# ---------------------------------------------------------------------------
+
+# 1) Génération du dataset de tomographie 
+
 
 def generate_qubit_tomography_dataset_base(
     n_states: int,
@@ -103,9 +103,9 @@ def generate_qubit_tomography_dataset_base(
     # Boucle sur les états
     for _ in range(n_states):
 
-        # ------------------------------------------------------------------
+      
         # 1) Tirage uniforme sur la sphère de Bloch -> état idéal (pur)
-        # ------------------------------------------------------------------
+      
         # Tirage uniforme de u = cos(theta) dans [-1,1]
         u = rng.uniform(-1.0, 1.0)
         theta_ideal = np.arccos(u)              # theta dans [0, pi]
@@ -116,10 +116,10 @@ def generate_qubit_tomography_dataset_base(
         Y_ideal = np.sin(theta_ideal) * np.sin(phi_ideal)
         Z_ideal = np.cos(theta_ideal)
 
-        # ------------------------------------------------------------------
+    
         # 2) Application du canal de décohérence (optionnel)
         #    -> on obtient l'état RÉEL (potentiellement mixte)
-        # ------------------------------------------------------------------
+       
         if include_decoherence and decoherence_level > 0.0:
 
             # Avec une certaine probabilité (proportion d'états bruités)
@@ -147,9 +147,9 @@ def generate_qubit_tomography_dataset_base(
             # Pas de décohérence du tout : état réel = état idéal (pur)
             X_real, Y_real, Z_real = X_ideal, Y_ideal, Z_ideal
 
-        # ------------------------------------------------------------------
+     
         # 3) Simulation des mesures (bruit statistique)
-        # ------------------------------------------------------------------
+
         if mode == "ideal":
             # Pas de bruit statistique : les features sont exactement l'état réel
             X_mean, Y_mean, Z_mean = X_real, Y_real, Z_real
@@ -160,9 +160,9 @@ def generate_qubit_tomography_dataset_base(
             Y_mean = simulate_mean(Y_real)
             Z_mean = simulate_mean(Z_real)
 
-        # ------------------------------------------------------------------
+    
         # 4) Construction du dictionnaire (une ligne du DataFrame)
-        # ------------------------------------------------------------------
+    
         record = {
             # FEATURES (toujours présents)
             "X_mean": X_mean,
@@ -190,9 +190,9 @@ def generate_qubit_tomography_dataset_base(
 
         records.append(record)
 
-    # ----------------------------------------------------------------------
+
     # 5) Création du DataFrame final
-    # ----------------------------------------------------------------------
+
     df = pd.DataFrame.from_records(records)
 
     # Sécurité supplémentaire : on attache n_shots aux attributs du dataframe
@@ -223,7 +223,7 @@ def perform_mle_tomography(df_input: pd.DataFrame, n_shots: int = None) -> tuple
         else:
             raise ValueError("n_shots non trouvé.")
 
-    # --- Matrices de Pauli ---
+    # Matrices de Pauli
     sigma_x = np.array([[0, 1], [1, 0]], dtype=complex)
     sigma_y = np.array([[0, -1j], [1j, 0]], dtype=complex)
     sigma_z = np.array([[1, 0], [0, -1]], dtype=complex)
@@ -235,7 +235,7 @@ def perform_mle_tomography(df_input: pd.DataFrame, n_shots: int = None) -> tuple
     Proj_Y = (I + sigma_y) / 2.0
     Proj_Z = (I + sigma_z) / 2.0
 
-    # --- Fonction de coût (NLL) ---
+    #  Fonction de coût (NLL) 
     def nll_rho(t_params, n_x, n_y, n_z, N):
         # 1. Reconstruire T à partir de 4 paramètres réels (Cholesky)
         # T = [[t0, 0], [t1 + i*t2, t3]]
@@ -265,7 +265,7 @@ def perform_mle_tomography(df_input: pd.DataFrame, n_shots: int = None) -> tuple
         
         return -ll
 
-    # --- Exécution ---
+    #  Exécution 
     df_result = df_input.copy()
     
     # Recalcul des comptes
@@ -396,9 +396,8 @@ def build_purity_classification_dataset(
         - si la simulation ne produit pas AU MOINS un état pur et un état mixte.
     """
 
-    # ----------------------------------------------------------------------
     # 0) Vérifications des paramètres d'entrée
-    # ----------------------------------------------------------------------
+
     if not (0.0 < mixed_proportion < 1.0):
         raise ValueError("mixed_proportion doit être strictement entre 0 et 1.")
 
@@ -412,9 +411,9 @@ def build_purity_classification_dataset(
     LABEL_COL = "label_purity"
     FEATURE_COLS = ["X_real", "Y_real", "Z_real", "bloch_radius_real", "is_pure"]
 
-    # ----------------------------------------------------------------------
+   
     # 1) Génération d'un dataset de base avec décohérence
-    # ----------------------------------------------------------------------
+  
     df_base = generate_qubit_tomography_dataset_base(
         n_states=n_states_total,
         n_shots=N_SHOTS,
@@ -427,9 +426,9 @@ def build_purity_classification_dataset(
         random_state=None,  # aléatoire
     )
 
-    # ----------------------------------------------------------------------
+
     # 2) Calcul du rayon de Bloch réel et définition du label pur / mixte
-    # ----------------------------------------------------------------------
+
     r_real = np.sqrt(
         df_base["X_real"]**2
         + df_base["Y_real"]**2
@@ -445,9 +444,9 @@ def build_purity_classification_dataset(
     #   0 = état mixte
     df_base[LABEL_COL] = df_base["is_pure"].astype(int)
 
-    # ----------------------------------------------------------------------
+
     # 3) Construction d'un dataset avec la proportion cible mixed_proportion
-    # ----------------------------------------------------------------------
+
     df_pure  = df_base[df_base[LABEL_COL] == 1]
     df_mixte = df_base[df_base[LABEL_COL] == 0]
 
@@ -495,9 +494,9 @@ def build_purity_classification_dataset(
     # Mélange final pour casser tout ordre structurel
     df_clf = df_clf.sample(frac=1.0, random_state=None).reset_index(drop=True)
 
-    # ----------------------------------------------------------------------
+
     # 4) Séparation features / labels pour le ML
-    # ----------------------------------------------------------------------
+
     X = df_clf[FEATURE_COLS].copy()
     y = df_clf[LABEL_COL].copy()
 
