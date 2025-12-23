@@ -1,6 +1,14 @@
 ipykernel
 python-dotenv
 pandas
-perceval-quandela
 numpy
 matplotlib
+scipy
+seaborn
+scikit-learn
+imbalanced-learn
+torch
+pennylane
+qiskit
+qiskit-machine-learning
+qutip
